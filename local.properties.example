@@ -1,0 +1,3 @@
+# Copy the line below into your local.properties file (project root).
+# Use your MapTiler mobile API key. Do not commit local.properties.
+MAPTILER_API_KEY=PASTE_YOUR_MAPTILER_KEY_HERE
