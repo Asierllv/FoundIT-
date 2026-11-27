@@ -3,6 +3,18 @@
 package com.example.foundit
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import com.example.foundit.viewmodel.RemoteFeedState
+import com.example.foundit.viewmodel.ProfileViewModel
 import android.location.Location
 import android.net.Uri
 import android.os.Bundle
@@ -73,6 +85,10 @@ import com.maptiler.maptilersdk.map.types.MTPoint
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.foundit.viewmodel.ChatViewModel
+import com.example.foundit.viewmodel.ExploreViewModel
 
 private val Cream = Color(0xFFF5F1E8)
 private val Paper = Color(0xFFFFFEFA)
@@ -106,177 +122,529 @@ data class FoundItem(
 
 private enum class AppPage { LOGIN, REGISTER, EXPLORE, CREATE, DETAIL, FAVORITES, PROFILE, EDIT_PROFILE, PUBLIC_PROFILE, CHAT_INBOX, CHAT, REVIEW }
 
+
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // MapTiler requires its API key before the first map/controller is initialized.
+
         MTConfig.apiKey = BuildConfig.MAPTILER_API_KEY
+
         setContent {
             FoundItTheme {
-                val db = remember { FoundItemDatabase.getDatabase(applicationContext) }
+
+                // Temporary local support recipient for chat testing
+                val supportEmail = "support@foundit.local"
+
+                val db = remember {
+                    FoundItemDatabase.getDatabase(applicationContext)
+                }
                 val itemDao = remember { db.foundItemDao() }
                 val userDao = remember { db.userDao() }
                 val communityDao = remember { db.communityDao() }
-                val itemsDb by itemDao.getAllItems().collectAsState(initial = emptyList())
-                val items = remember(itemsDb) { itemsDb.map { it.toFoundItem() } }
-                val prefs = remember { getSharedPreferences("foundit_session", Context.MODE_PRIVATE) }
-                val scope = rememberCoroutineScope()
-                var currentUser by remember { mutableStateOf<UserEntity?>(null) }
-                var page by remember { mutableStateOf(AppPage.LOGIN) }
-                var selectedItem by remember { mutableStateOf<FoundItem?>(null) }
-                var detailReturnPage by remember { mutableStateOf(AppPage.EXPLORE) }
-                // Preserve the parent screen when a chat/profile temporarily opens another listing.
-                var detailReturnPageBeforeChat by remember { mutableStateOf(AppPage.EXPLORE) }
-                var detailReturnPageBeforePublicProfile by remember { mutableStateOf(AppPage.EXPLORE) }
-                var publicProfileReturnPage by remember { mutableStateOf(AppPage.CHAT) }
-                var selectedChatPartner by remember { mutableStateOf("") }
-                var viewedProfileUser by remember { mutableStateOf<UserEntity?>(null) }
-                var chatReturnPage by remember { mutableStateOf(AppPage.DETAIL) }
-                var authMessage by remember { mutableStateOf("") }
-                val chatMessages by remember(selectedItem?.id, currentUser?.email, selectedChatPartner) {
-                    communityDao.messages(selectedItem?.id ?: -1, currentUser?.email.orEmpty(), selectedChatPartner)
-                }.collectAsState(initial = emptyList())
-                val allChatMessages by remember(currentUser?.email) {
-                    communityDao.allMessagesFor(currentUser?.email.orEmpty())
-                }.collectAsState(initial = emptyList())
-                val myReviews by remember(currentUser?.email) { communityDao.reviewsFor(currentUser?.email.orEmpty()) }
-                    .collectAsState(initial = emptyList())
-                val viewedProfileReviews by remember(viewedProfileUser?.email) { communityDao.reviewsFor(viewedProfileUser?.email.orEmpty()) }
-                    .collectAsState(initial = emptyList())
+
+                val prefs = remember {
+                    getSharedPreferences("foundit_session", Context.MODE_PRIVATE)
+                }
+
+                val exploreViewModel: ExploreViewModel = viewModel()
+                val remoteState by exploreViewModel.remoteState
+                    .collectAsStateWithLifecycle()
+
+                val profileViewModel: ProfileViewModel = viewModel()
+                val chatViewModel: ChatViewModel = viewModel()
+
+                val itemsDb by exploreViewModel.localListings
+                    .collectAsStateWithLifecycle()
+
+                val items = remember(itemsDb) {
+                    itemsDb.map { it.toFoundItem() }
+                }
+
 
                 LaunchedEffect(Unit) {
-                    val id = prefs.getInt("user_id", -1)
-                    if (id > 0) {
-                        currentUser = withContext(Dispatchers.IO) { userDao.findById(id) }
-                        page = if (currentUser == null) AppPage.LOGIN else AppPage.EXPLORE
+                    val alreadySeeded = prefs.getBoolean(
+                        "foundit_demo_listings_v1",
+                        false
+                    )
+
+                    if (!alreadySeeded) {
+                        val demoListings = listOf(
+                            FoundItemEntity(
+                                title = "Wireless Headphones",
+                                location = "Sheffield Railway Station",
+                                category = "Electronics",
+                                date = "Today",
+                                description = "Black wireless headphones found near the station.",
+                                finderContact = "alex.demo@example.test",
+                                ownerEmail = "alex.demo@example.test",
+                                status = "FOUND"
+                            ),
+                            FoundItemEntity(
+                                title = "Brown Leather Wallet",
+                                location = "Kelham Island, Sheffield",
+                                category = "Wallets",
+                                date = "Yesterday",
+                                description = "Brown leather wallet found in a coffee shop.",
+                                finderContact = "mia.demo@example.test",
+                                ownerEmail = "mia.demo@example.test",
+                                status = "FOUND"
+                            ),
+                            FoundItemEntity(
+                                title = "Set of House Keys",
+                                location = "Broomhill, Sheffield",
+                                category = "Keys",
+                                date = "Today",
+                                description = "Several keys with a blue keyring.",
+                                finderContact = "oliver.demo@example.test",
+                                ownerEmail = "oliver.demo@example.test",
+                                status = "FOUND"
+                            ),
+                            FoundItemEntity(
+                                title = "Black Backpack",
+                                location = "Crookes, Sheffield",
+                                category = "Bags",
+                                date = "Yesterday",
+                                description = "Black backpack left near a park.",
+                                finderContact = "sophie.demo@example.test",
+                                ownerEmail = "sophie.demo@example.test",
+                                status = "FOUND"
+                            ),
+                            FoundItemEntity(
+                                title = "Gold Necklace",
+                                location = "Sheffield City Centre",
+                                category = "Jewellery",
+                                date = "Today",
+                                description = "Small gold necklace with a pendant.",
+                                finderContact = "noah.demo@example.test",
+                                ownerEmail = "noah.demo@example.test",
+                                status = "FOUND"
+                            ),
+                            FoundItemEntity(
+                                title = "Black Smartphone",
+                                location = "Ecclesall Road, Sheffield",
+                                category = "Electronics",
+                                date = "Today",
+                                description = "Black smartphone found near a bus stop.",
+                                finderContact = "emma.demo@example.test",
+                                ownerEmail = "emma.demo@example.test",
+                                status = "FOUND"
+                            )
+                        )
+
+                        withContext(Dispatchers.IO) {
+                            demoListings.forEach { item ->
+                                itemDao.insertItem(item)
+                            }
+                        }
+
+                        prefs.edit()
+                            .putBoolean("foundit_demo_listings_v1", true)
+                            .apply()
                     }
                 }
 
-                BackHandler(enabled = page != AppPage.LOGIN && page != AppPage.EXPLORE) {
+                val scope = rememberCoroutineScope()
+
+                var currentUser by remember {
+                    mutableStateOf<UserEntity?>(null)
+                }
+
+                val profileUser by profileViewModel.profile
+                    .collectAsStateWithLifecycle()
+
+                LaunchedEffect(currentUser?.email) {
+                    currentUser?.email?.let { email ->
+                        profileViewModel.load(email)
+                    }
+                }
+
+                var page by remember { mutableStateOf(AppPage.LOGIN) }
+                var selectedItem by remember { mutableStateOf<FoundItem?>(null) }
+
+                var detailReturnPage by remember {
+                    mutableStateOf(AppPage.EXPLORE)
+                }
+
+                var detailReturnPageBeforeChat by remember {
+                    mutableStateOf(AppPage.EXPLORE)
+                }
+
+                var detailReturnPageBeforePublicProfile by remember {
+                    mutableStateOf(AppPage.EXPLORE)
+                }
+
+                var publicProfileReturnPage by remember {
+                    mutableStateOf(AppPage.CHAT)
+                }
+
+                var selectedChatPartner by remember {
+                    mutableStateOf("")
+                }
+
+                var viewedProfileUser by remember {
+                    mutableStateOf<UserEntity?>(null)
+                }
+
+                var chatReturnPage by remember {
+                    mutableStateOf(AppPage.DETAIL)
+                }
+
+                var authMessage by remember {
+                    mutableStateOf("")
+                }
+
+                val chatMessages by chatViewModel.messages
+                    .collectAsStateWithLifecycle()
+
+                val allChatMessages by remember(currentUser?.email) {
+                    communityDao.allMessagesFor(currentUser?.email.orEmpty())
+                }.collectAsState(initial = emptyList())
+
+                LaunchedEffect(
+                    selectedItem?.id,
+                    currentUser?.email,
+                    selectedChatPartner
+                ) {
+                    val itemId = selectedItem?.id
+                    val email = currentUser?.email
+                    val partner = selectedChatPartner.ifBlank { supportEmail }
+
+                    if (itemId != null && email != null) {
+                        chatViewModel.loadConversation(
+                            itemId = itemId,
+                            currentUser = email,
+                            otherUser = partner
+                        )
+                    }
+                }
+
+                val myReviews by remember(currentUser?.email) {
+                    communityDao.reviewsFor(currentUser?.email.orEmpty())
+                }.collectAsState(initial = emptyList())
+
+                val viewedProfileReviews by remember(viewedProfileUser?.email) {
+                    communityDao.reviewsFor(viewedProfileUser?.email.orEmpty())
+                }.collectAsState(initial = emptyList())
+
+                LaunchedEffect(Unit) {
+                    val id = prefs.getInt("user_id", -1)
+
+                    if (id > 0) {
+                        currentUser = withContext(Dispatchers.IO) {
+                            userDao.findById(id)
+                        }
+
+                        page = if (currentUser == null) {
+                            AppPage.LOGIN
+                        } else {
+                            AppPage.EXPLORE
+                        }
+                    }
+                }
+
+                BackHandler(
+                    enabled = page != AppPage.LOGIN &&
+                            page != AppPage.EXPLORE
+                ) {
                     when (page) {
                         AppPage.PUBLIC_PROFILE -> {
-                            if (publicProfileReturnPage == AppPage.DETAIL) detailReturnPage = detailReturnPageBeforePublicProfile
+                            if (publicProfileReturnPage == AppPage.DETAIL) {
+                                detailReturnPage =
+                                    detailReturnPageBeforePublicProfile
+                            }
                             page = publicProfileReturnPage
                         }
+
                         AppPage.DETAIL -> page = detailReturnPage
-                        AppPage.CHAT -> { detailReturnPage = detailReturnPageBeforeChat; page = chatReturnPage }
+
+                        AppPage.CHAT -> {
+                            detailReturnPage = detailReturnPageBeforeChat
+                            page = chatReturnPage
+                        }
+
                         AppPage.EDIT_PROFILE -> page = AppPage.PROFILE
                         AppPage.REVIEW -> page = AppPage.DETAIL
-                        AppPage.CREATE, AppPage.FAVORITES, AppPage.PROFILE, AppPage.CHAT_INBOX -> page = AppPage.EXPLORE
+
+                        AppPage.CREATE,
+                        AppPage.FAVORITES,
+                        AppPage.PROFILE,
+                        AppPage.CHAT_INBOX -> page = AppPage.EXPLORE
+
                         AppPage.REGISTER -> page = AppPage.LOGIN
                         else -> page = AppPage.EXPLORE
                     }
                 }
 
                 when (page) {
-                    AppPage.LOGIN -> AuthScreen(false, authMessage,
-                        onSwitch = { authMessage = ""; page = AppPage.REGISTER },
+
+                    AppPage.LOGIN -> AuthScreen(
+                        false,
+                        authMessage,
+                        onSwitch = {
+                            authMessage = ""
+                            page = AppPage.REGISTER
+                        },
                         onSubmit = { email, password, _ ->
                             scope.launch {
-                                val user = withContext(Dispatchers.IO) { userDao.findByEmail(email.trim().lowercase()) }
-                                if (user != null && verifyPassword(password, user.passwordSalt, user.passwordHash)) {
+                                val user = withContext(Dispatchers.IO) {
+                                    userDao.findByEmail(
+                                        email.trim().lowercase()
+                                    )
+                                }
+
+                                if (
+                                    user != null &&
+                                    verifyPassword(
+                                        password,
+                                        user.passwordSalt,
+                                        user.passwordHash
+                                    )
+                                ) {
                                     currentUser = user
-                                    prefs.edit().putInt("user_id", user.id).apply()
+                                    prefs.edit()
+                                        .putInt("user_id", user.id)
+                                        .apply()
+
                                     authMessage = ""
                                     page = AppPage.EXPLORE
-                                } else authMessage = "Incorrect email or password."
+                                } else {
+                                    authMessage = "Incorrect email or password."
+                                }
                             }
-                        })
-                    AppPage.REGISTER -> AuthScreen(true, authMessage,
-                        onSwitch = { authMessage = ""; page = AppPage.LOGIN },
+                        }
+                    )
+
+                    AppPage.REGISTER -> AuthScreen(
+                        true,
+                        authMessage,
+                        onSwitch = {
+                            authMessage = ""
+                            page = AppPage.LOGIN
+                        },
                         onSubmit = { email, password, name ->
                             scope.launch {
-                                if (name.isBlank() || !Patterns.EMAIL_ADDRESS.matcher(email).matches() || password.length < 6) {
-                                    authMessage = "Enter a name, a valid email and a password with at least 6 characters."
+                                if (
+                                    name.isBlank() ||
+                                    !Patterns.EMAIL_ADDRESS.matcher(email).matches() ||
+                                    password.length < 6
+                                ) {
+                                    authMessage =
+                                        "Enter a name, a valid email and a password with at least 6 characters."
                                 } else {
                                     try {
                                         val salt = newSalt()
-                                        val user = UserEntity(name = name.trim(), email = email.trim().lowercase(),
-                                            passwordHash = hashPassword(password, salt), passwordSalt = salt)
-                                        val id = withContext(Dispatchers.IO) { userDao.insert(user).toInt() }
+
+                                        val user = UserEntity(
+                                            name = name.trim(),
+                                            email = email.trim().lowercase(),
+                                            passwordHash = hashPassword(password, salt),
+                                            passwordSalt = salt
+                                        )
+
+                                        val id = withContext(Dispatchers.IO) {
+                                            userDao.insert(user).toInt()
+                                        }
+
                                         currentUser = user.copy(id = id)
-                                        prefs.edit().putInt("user_id", id).apply()
+
+                                        prefs.edit()
+                                            .putInt("user_id", id)
+                                            .apply()
+
                                         authMessage = ""
                                         page = AppPage.EXPLORE
+
                                     } catch (_: Exception) {
-                                        authMessage = "This email is already registered. Please sign in."
+                                        authMessage =
+                                            "This email is already registered. Please sign in."
                                     }
                                 }
                             }
-                        })
+                        }
+                    )
+
                     AppPage.EXPLORE -> MainShell(
-                        items = items, user = currentUser,
+                        items = items,
+                        user = currentUser,
                         onCreate = { page = AppPage.CREATE },
                         onFavorites = { page = AppPage.FAVORITES },
                         onProfile = { page = AppPage.PROFILE },
                         onChats = { page = AppPage.CHAT_INBOX },
-                        chatUnreadCount = allChatMessages.count { it.receiverEmail.equals(currentUser?.email, true) && !it.isRead },
-                        onOpenItem = { selectedItem = it; page = AppPage.DETAIL },
-                        onFavorite = { item, fav -> scope.launch { itemDao.setFavorite(item.id, fav) } }
+                        chatUnreadCount = allChatMessages.count {
+                            it.receiverEmail.equals(currentUser?.email, true) &&
+                                    !it.isRead
+                        },
+                        onOpenItem = {
+                            selectedItem = it
+                            page = AppPage.DETAIL
+                        },
+                        onFavorite = { item, fav ->
+                            scope.launch {
+                                itemDao.setFavorite(item.id, fav)
+                            }
+                        },
+                        remoteState = remoteState,
+                        onRefreshRemote = {
+                            exploreViewModel.refreshRemoteSample()
+                        }
                     )
+
                     AppPage.CREATE -> CreateItemScreen(
                         user = currentUser,
                         onBack = { page = AppPage.EXPLORE },
                         onPublish = { item ->
                             scope.launch {
-                                withContext(Dispatchers.IO) { itemDao.insertItem(item) }
+                                withContext(Dispatchers.IO) {
+                                    itemDao.insertItem(item)
+                                }
                                 page = AppPage.EXPLORE
                             }
                         }
                     )
+
                     AppPage.DETAIL -> selectedItem?.let { item ->
-                        ItemDetailScreen(item, onBack = { page = detailReturnPage },
+
+                        ItemDetailScreen(
+                            item,
+                            onBack = { page = detailReturnPage },
+
                             onViewPosterProfile = {
                                 scope.launch {
-                                    viewedProfileUser = withContext(Dispatchers.IO) { userDao.findByEmail(item.ownerEmail) }
+                                    viewedProfileUser =
+                                        withContext(Dispatchers.IO) {
+                                            userDao.findByEmail(item.ownerEmail)
+                                        }
+
                                     publicProfileReturnPage = AppPage.DETAIL
-                                    detailReturnPageBeforePublicProfile = detailReturnPage
-                                    if (viewedProfileUser != null) page = AppPage.PUBLIC_PROFILE
+                                    detailReturnPageBeforePublicProfile =
+                                        detailReturnPage
+
+                                    if (viewedProfileUser != null) {
+                                        page = AppPage.PUBLIC_PROFILE
+                                    }
                                 }
                             },
-                            onFavorite = { fav -> scope.launch { itemDao.setFavorite(item.id, fav) } },
-                            onChat = { detailReturnPageBeforeChat = detailReturnPage; selectedChatPartner = item.ownerEmail; chatReturnPage = AppPage.DETAIL; page = AppPage.CHAT }, onReview = { page = AppPage.REVIEW }, canReview = currentUser?.email != item.ownerEmail, canContact = currentUser?.email != item.ownerEmail)
-                    } ?: run { page = AppPage.EXPLORE }
-                    AppPage.FAVORITES -> SimpleItemsPage("Your saved items", items.filter { it.isFavorite },
-                        onBack = { page = AppPage.EXPLORE }, onOpen = { selectedItem = it; page = AppPage.DETAIL })
+
+                            onFavorite = { fav ->
+                                scope.launch {
+                                    itemDao.setFavorite(item.id, fav)
+                                }
+                            },
+
+                            onChat = {
+                                detailReturnPageBeforeChat = detailReturnPage
+
+                                selectedChatPartner = item.ownerEmail
+                                    .trim()
+                                    .ifBlank { supportEmail }
+
+                                android.util.Log.d(
+                                    "FoundItChat",
+                                    "Opening chat with '$selectedChatPartner'"
+                                )
+
+                                chatReturnPage = AppPage.DETAIL
+                                page = AppPage.CHAT
+                            },
+
+                            onReview = { page = AppPage.REVIEW },
+                            canReview = currentUser?.email != item.ownerEmail,
+                            canContact = currentUser?.email != item.ownerEmail
+                        )
+
+                    } ?: run {
+                        page = AppPage.EXPLORE
+                    }
+
+                    AppPage.FAVORITES -> SimpleItemsPage(
+                        "Your saved items",
+                        items.filter { it.isFavorite },
+                        onBack = { page = AppPage.EXPLORE },
+                        onOpen = {
+                            selectedItem = it
+                            page = AppPage.DETAIL
+                        }
+                    )
+
                     AppPage.PROFILE -> ProfileScreen(
                         user = currentUser,
-                        ownItems = items.filter { it.ownerEmail == currentUser?.email },
+                        ownItems = items.filter {
+                            it.ownerEmail == currentUser?.email
+                        },
                         reviews = myReviews,
                         onBack = { page = AppPage.EXPLORE },
                         onEdit = { page = AppPage.EDIT_PROFILE },
                         onLogout = {
-                            prefs.edit().remove("user_id").apply(); currentUser = null; page = AppPage.LOGIN
+                            prefs.edit().remove("user_id").apply()
+                            currentUser = null
+                            selectedChatPartner = ""
+                            page = AppPage.LOGIN
                         },
-                        onOpen = { selectedItem = it; page = AppPage.DETAIL }
+                        onOpen = {
+                            selectedItem = it
+                            page = AppPage.DETAIL
+                        }
                     )
+
                     AppPage.EDIT_PROFILE -> EditProfileScreen(
                         user = currentUser,
                         onBack = { page = AppPage.PROFILE },
                         onSave = { name, bio, avatarUri ->
                             val user = currentUser
-                            if (user != null) scope.launch {
-                                withContext(Dispatchers.IO) { userDao.updateProfile(user.id, name, bio, avatarUri) }
-                                currentUser = user.copy(name = name, bio = bio, avatarUri = avatarUri)
-                                page = AppPage.PROFILE
+
+                            if (user != null) {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        userDao.updateProfile(
+                                            user.id,
+                                            name,
+                                            bio,
+                                            avatarUri
+                                        )
+                                    }
+
+                                    currentUser = user.copy(
+                                        name = name,
+                                        bio = bio,
+                                        avatarUri = avatarUri
+                                    )
+
+                                    page = AppPage.PROFILE
+                                }
                             }
                         }
                     )
+
                     AppPage.PUBLIC_PROFILE -> viewedProfileUser?.let { profileUser ->
+
                         PublicProfileScreen(
                             user = profileUser,
-                            listings = items.filter { it.ownerEmail.equals(profileUser.email, true) },
+                            listings = items.filter {
+                                it.ownerEmail.equals(profileUser.email, true)
+                            },
                             reviews = viewedProfileReviews,
+
                             onBack = {
                                 if (publicProfileReturnPage == AppPage.DETAIL) {
-                                    detailReturnPage = detailReturnPageBeforePublicProfile
+                                    detailReturnPage =
+                                        detailReturnPageBeforePublicProfile
                                 }
                                 page = publicProfileReturnPage
                             },
-                            onOpenItem = { selectedItem = it; detailReturnPage = AppPage.PUBLIC_PROFILE; page = AppPage.DETAIL }
+
+                            onOpenItem = {
+                                selectedItem = it
+                                detailReturnPage = AppPage.PUBLIC_PROFILE
+                                page = AppPage.DETAIL
+                            }
                         )
-                    } ?: run { page = AppPage.CHAT }
+
+                    } ?: run {
+                        page = AppPage.CHAT
+                    }
+
                     AppPage.CHAT_INBOX -> ChatInboxScreen(
                         messages = allChatMessages,
                         items = items,
@@ -285,45 +653,129 @@ class MainActivity : ComponentActivity() {
                         onExplore = { page = AppPage.EXPLORE },
                         onSaved = { page = AppPage.FAVORITES },
                         onProfile = { page = AppPage.PROFILE },
+
                         onOpenConversation = { item, partnerEmail ->
                             selectedItem = item
+
+                            // Never allow an empty chat recipient
                             selectedChatPartner = partnerEmail
+                                .trim()
+                                .ifBlank { supportEmail }
+
                             chatReturnPage = AppPage.CHAT_INBOX
-                            scope.launch { communityDao.markConversationRead(item.id, currentUser?.email.orEmpty(), partnerEmail) }
+
+                            scope.launch {
+                                communityDao.markConversationRead(
+                                    item.id,
+                                    currentUser?.email.orEmpty(),
+                                    selectedChatPartner
+                                )
+                            }
+
                             page = AppPage.CHAT
                         }
                     )
+
                     AppPage.CHAT -> selectedItem?.let { item ->
+
+                        // Final fallback protects the chat screen and send action
+                        val chatRecipient = selectedChatPartner
+                            .ifBlank { supportEmail }
+
                         ChatScreen(
-                            item = item, user = currentUser, chatPartnerEmail = selectedChatPartner, messages = chatMessages,
-                            onBack = { detailReturnPage = detailReturnPageBeforeChat; page = chatReturnPage },
-                            onOpenItem = { selectedItem = item; detailReturnPage = AppPage.CHAT; page = AppPage.DETAIL },
+                            item = item,
+                            user = currentUser,
+                            chatPartnerEmail = chatRecipient,
+                            messages = chatMessages,
+
+                            onBack = {
+                                detailReturnPage = detailReturnPageBeforeChat
+                                page = chatReturnPage
+                            },
+
+                            onOpenItem = {
+                                selectedItem = item
+                                detailReturnPage = AppPage.CHAT
+                                page = AppPage.DETAIL
+                            },
+
                             onOpenProfile = {
                                 scope.launch {
-                                    viewedProfileUser = withContext(Dispatchers.IO) { userDao.findByEmail(selectedChatPartner) }
+                                    viewedProfileUser =
+                                        withContext(Dispatchers.IO) {
+                                            userDao.findByEmail(chatRecipient)
+                                        }
+
                                     publicProfileReturnPage = AppPage.CHAT
-                                    detailReturnPageBeforePublicProfile = detailReturnPage
-                                    if (viewedProfileUser != null) page = AppPage.PUBLIC_PROFILE
+                                    detailReturnPageBeforePublicProfile =
+                                        detailReturnPage
+
+                                    if (viewedProfileUser != null) {
+                                        page = AppPage.PUBLIC_PROFILE
+                                    }
                                 }
                             },
-                            onSend = { body -> scope.launch { communityDao.send(ChatMessageEntity(itemId = item.id,
-                                senderEmail = currentUser?.email.orEmpty(), receiverEmail = selectedChatPartner, body = body)) } }
-                        )
-                    } ?: run { page = AppPage.CHAT_INBOX }
-                    AppPage.REVIEW -> selectedItem?.let { item ->
-                        ReviewScreen(item, currentUser, onBack = { page = AppPage.DETAIL }, onSubmit = { rating, comment ->
-                            scope.launch {
-                                communityDao.addReview(ReviewEntity(itemId = item.id, reviewerEmail = currentUser?.email.orEmpty(),
-                                    reviewedEmail = item.ownerEmail, rating = rating, comment = comment))
-                                page = AppPage.PROFILE
+
+                            onSend = { body ->
+                                val sender = currentUser?.email.orEmpty()
+                                val receiver = selectedChatPartner
+                                    .ifBlank { supportEmail }
+
+                                android.util.Log.d(
+                                    "FoundItChat",
+                                    "CURRENT USER = '$sender'"
+                                )
+
+                                android.util.Log.d(
+                                    "FoundItChat",
+                                    "CHAT PARTNER = '$receiver'"
+                                )
+
+                                chatViewModel.sendMessage(
+                                    itemId = item.id,
+                                    sender = sender,
+                                    receiver = receiver,
+                                    body = body
+                                )
                             }
-                        })
-                    } ?: run { page = AppPage.EXPLORE }
+                        )
+
+                    } ?: run {
+                        page = AppPage.CHAT_INBOX
+                    }
+
+                    AppPage.REVIEW -> selectedItem?.let { item ->
+
+                        ReviewScreen(
+                            item,
+                            currentUser,
+                            onBack = { page = AppPage.DETAIL },
+                            onSubmit = { rating, comment ->
+                                scope.launch {
+                                    communityDao.addReview(
+                                        ReviewEntity(
+                                            itemId = item.id,
+                                            reviewerEmail = currentUser?.email.orEmpty(),
+                                            reviewedEmail = item.ownerEmail,
+                                            rating = rating,
+                                            comment = comment
+                                        )
+                                    )
+
+                                    page = AppPage.PROFILE
+                                }
+                            }
+                        )
+
+                    } ?: run {
+                        page = AppPage.EXPLORE
+                    }
                 }
             }
         }
     }
 }
+
 
 @Composable
 private fun AuthScreen(register: Boolean, message: String, onSwitch: () -> Unit,
@@ -370,9 +822,19 @@ private fun AuthScreen(register: Boolean, message: String, onSwitch: () -> Unit,
 }
 
 @Composable
-private fun MainShell(items: List<FoundItem>, user: UserEntity?, onCreate: () -> Unit, onFavorites: () -> Unit,
-                      onProfile: () -> Unit, onChats: () -> Unit, chatUnreadCount: Int,
-                      onOpenItem: (FoundItem) -> Unit, onFavorite: (FoundItem, Boolean) -> Unit) {
+private fun MainShell(
+    items: List<FoundItem>,
+    user: UserEntity?,
+    onCreate: () -> Unit,
+    onFavorites: () -> Unit,
+    onProfile: () -> Unit,
+    onChats: () -> Unit,
+    chatUnreadCount: Int,
+    onOpenItem: (FoundItem) -> Unit,
+    onFavorite: (FoundItem, Boolean) -> Unit,
+    remoteState: RemoteFeedState,
+    onRefreshRemote: () -> Unit
+){
     var tab by remember { mutableStateOf(0) }
     var showMapResults by remember { mutableStateOf(false) }
     var searchLocation by remember { mutableStateOf("") }
@@ -412,6 +874,8 @@ private fun MainShell(items: List<FoundItem>, user: UserEntity?, onCreate: () ->
             )
         } else {
             ExploreLandingScreen(
+                remoteState = remoteState,
+                onRefreshRemote = onRefreshRemote,
                 items = items,
                 user = user,
                 modifier = Modifier.padding(padding),
@@ -435,130 +899,353 @@ private fun MainShell(items: List<FoundItem>, user: UserEntity?, onCreate: () ->
 
 @Composable
 private fun ExploreLandingScreen(
-    items: List<FoundItem>, user: UserEntity?, modifier: Modifier,
-    location: String, onLocationChange: (String) -> Unit,
+
+    remoteState: RemoteFeedState,
+    onRefreshRemote: () -> Unit,
+    items: List<FoundItem>,
+    user: UserEntity?,
+    modifier: Modifier,
+    location: String,
+    onLocationChange: (String) -> Unit,
     onDeviceLocation: (Location) -> Unit,
-    selectedCategories: Set<String>, onCategoryToggle: (String) -> Unit,
-    onSearch: () -> Unit, onCreate: () -> Unit, onOpenItem: (FoundItem) -> Unit,
+    selectedCategories: Set<String>,
+    onCategoryToggle: (String) -> Unit,
+    onSearch: () -> Unit,
+    onCreate: () -> Unit,
+    onOpenItem: (FoundItem) -> Unit,
     onFavorite: (FoundItem, Boolean) -> Unit
 ) {
-    val citySuggestions = listOf("Lodz", "London", "Madrid", "Barcelona", "Warsaw", "Sheffield", "Paris")
-    Column(modifier.fillMaxSize().background(Cream)) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(22.dp)
+    val hasInternet = rememberInternetConnection()
+    val citySuggestions = listOf(
+        "Lodz", "London", "Madrid", "Barcelona",
+        "Warsaw", "Sheffield", "Paris"
+    )
+
+    if (!hasInternet) {
+
+        NoConnectionScreen(
+            onRetry = onRefreshRemote
+        )
+
+    } else {
+
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Cream)
         ) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("FoundIt", color = Forest, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                        Text("LOST & FOUND, RECONNECTED", color = Olive, fontSize = 10.sp, letterSpacing = 2.sp)
-                    }
-                    Text("Hi, ${user?.name?.substringBefore(" ") ?: "there"} ✦", color = Forest,
-                        style = MaterialTheme.typography.labelLarge)
-                }
-            }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text("Find what you have lost", color = Forest, fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                    Text("Search by place, item or category", color = Olive, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            item {
-                Surface(shape = RoundedCornerShape(24.dp), color = Paper, shadowElevation = 4.dp) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Where did you lose it?", color = Forest, fontWeight = FontWeight.Bold)
-                        OutlinedTextField(
-                            value = location, onValueChange = onLocationChange,
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("City, neighbourhood or place") },
-                            leadingIcon = {
-                                LocationPermissionControl(
-                                    onLocation = onDeviceLocation,
-                                    onManualFallback = { /* Keep the city search available if permission is denied. */ },
-                                    onUnavailable = { /* The user can continue with manual place search. */ }
-                                )
-                            },
-                            singleLine = true, shape = RoundedCornerShape(16.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Sage, unfocusedBorderColor = Sage,
-                                focusedContainerColor = Cream, unfocusedContainerColor = Cream
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = 22.dp,
+                    bottom = 24.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(22.dp)
+            ) {
+
+                // HEADER
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "FoundIt",
+                                color = Forest,
+                                fontSize = 34.sp,
+                                fontWeight = FontWeight.Bold
                             )
-                        )
-                        Text("Popular places", color = Olive, style = MaterialTheme.typography.labelMedium)
-                        Text("Search results are limited to a 10 km radius", color = Olive, style = MaterialTheme.typography.labelSmall)
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            citySuggestions.forEach { city ->
-                                FilterChip(
-                                    selected = location.equals(city, true),
-                                    onClick = { onLocationChange(city) },
-                                    label = { Text(city) }, shape = CircleShape,
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Forest, selectedLabelColor = Cream,
-                                        containerColor = Cream, labelColor = Forest
-                                    )
-                                )
-                            }
+
+                            Text(
+                                "LOST & FOUND, RECONNECTED",
+                                color = Olive,
+                                fontSize = 10.sp,
+                                letterSpacing = 2.sp
+                            )
                         }
+
+                        Text(
+                            "Hi, ${user?.name?.substringBefore(" ") ?: "there"} ✦",
+                            color = Forest,
+                            style = MaterialTheme.typography.labelLarge
+                        )
                     }
                 }
-            }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("What are you looking for?", color = Forest, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                    Text("Choose one or more categories to narrow your search", color = Olive, style = MaterialTheme.typography.bodySmall)
-                    categories.chunked(2).forEach { rowCategories ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            rowCategories.forEach { category ->
-                                val active = category.label in selectedCategories
-                                Surface(
-                                    modifier = Modifier.weight(1f).clickable { onCategoryToggle(category.label) },
-                                    shape = RoundedCornerShape(18.dp), color = if (active) Forest else Paper,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (active) Forest else Sage),
-                                    shadowElevation = if (active) 2.dp else 0.dp
-                                ) {
-                                    Column(Modifier.padding(vertical = 15.dp, horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(category.emoji, fontSize = 27.sp)
-                                        Spacer(Modifier.height(5.dp))
-                                        Text(category.label, color = if (active) Cream else Forest, fontWeight = FontWeight.SemiBold)
-                                    }
+
+                // INTRODUCTION
+                item {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        Text(
+                            "Find what you have lost",
+                            color = Forest,
+                            fontSize = 27.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            "Search by place, item or category",
+                            color = Olive,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
+                // LOCATION SEARCH
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = Paper,
+                        shadowElevation = 4.dp
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                "Where did you lose it?",
+                                color = Forest,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            OutlinedTextField(
+                                value = location,
+                                onValueChange = onLocationChange,
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = {
+                                    Text("City, neighbourhood or place")
+                                },
+                                leadingIcon = {
+                                    LocationPermissionControl(
+                                        onLocation = onDeviceLocation,
+                                        onManualFallback = {
+                                            // Manual search remains available.
+                                        },
+                                        onUnavailable = {
+                                            // Manual search remains available.
+                                        }
+                                    )
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(16.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Sage,
+                                    unfocusedBorderColor = Sage,
+                                    focusedContainerColor = Cream,
+                                    unfocusedContainerColor = Cream
+                                )
+                            )
+
+                            Text(
+                                "Popular places",
+                                color = Olive,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+
+                            Text(
+                                "Search results are limited to a 10 km radius",
+                                color = Olive,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                citySuggestions.forEach { city ->
+                                    FilterChip(
+                                        selected = location.equals(city, true),
+                                        onClick = {
+                                            onLocationChange(city)
+                                        },
+                                        label = {
+                                            Text(city)
+                                        },
+                                        shape = CircleShape,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Forest,
+                                            selectedLabelColor = Cream,
+                                            containerColor = Cream,
+                                            labelColor = Forest
+                                        )
+                                    )
                                 }
                             }
-                            if (rowCategories.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().clickable { selectedCategories.toList().forEach(onCategoryToggle) },
-                        shape = RoundedCornerShape(14.dp), color = if (selectedCategories.isEmpty()) Sage else Paper
+                }
+
+                // CATEGORIES
+                item {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("✦  Clear category filters · All categories", modifier = Modifier.padding(14.dp), color = Forest, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "What are you looking for?",
+                            color = Forest,
+                            fontSize = 21.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            "Choose one or more categories to narrow your search",
+                            color = Olive,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+
+                        categories.chunked(2).forEach { rowCategories ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                rowCategories.forEach { category ->
+                                    val active =
+                                        category.label in selectedCategories
+
+                                    Surface(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                onCategoryToggle(category.label)
+                                            },
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = if (active) Forest else Paper,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (active) Forest else Sage
+                                        ),
+                                        shadowElevation = if (active) 2.dp else 0.dp
+                                    ) {
+                                        Column(
+                                            Modifier.padding(
+                                                vertical = 15.dp,
+                                                horizontal = 12.dp
+                                            ),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                category.emoji,
+                                                fontSize = 27.sp
+                                            )
+
+                                            Spacer(Modifier.height(5.dp))
+
+                                            Text(
+                                                category.label,
+                                                color = if (active) Cream else Forest,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (rowCategories.size == 1) {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedCategories.toList()
+                                        .forEach(onCategoryToggle)
+                                },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (selectedCategories.isEmpty()) Sage else Paper
+                        ) {
+                            Text(
+                                "✦  Clear category filters · All categories",
+                                modifier = Modifier.padding(14.dp),
+                                color = Forest,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
-            }
-            item {
-                Button(
-                    onClick = onSearch,
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Forest),
-                    shape = RoundedCornerShape(17.dp)
-                ) { Text("Find items  →", color = Cream, fontSize = 17.sp, fontWeight = FontWeight.Bold) }
-            }
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Recent listings", color = Forest, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text("Items shared by the community", color = Olive, style = MaterialTheme.typography.bodySmall)
+
+                // SEARCH BUTTON
+                item {
+                    Button(
+                        onClick = onSearch,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(58.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Forest
+                        ),
+                        shape = RoundedCornerShape(17.dp)
+                    ) {
+                        Text(
+                            "Find items  →",
+                            color = Cream,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
-                    TextButton(onClick = onSearch) { Text("See all", color = Forest) }
                 }
-            }
-            items(items.take(5), key = { "landing-${it.id}" }) { item ->
-                ItemMiniCard(item, onClick = { onOpenItem(item) }, onFavorite = { onFavorite(item, !item.isFavorite) })
-            }
-            item {
-                OutlinedButton(onClick = onCreate, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                    Text("＋ Post an item", color = Forest)
+
+                // RECENT LISTINGS HEADER
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Recent listings",
+                                color = Forest,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            Text(
+                                "Items shared by the community",
+                                color = Olive,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        TextButton(onClick = onSearch) {
+                            Text("See all", color = Forest)
+                        }
+                    }
+                }
+
+                // RECENT LISTINGS
+                items(
+                    items.take(5),
+                    key = { "landing-${it.id}" }
+                ) { item ->
+                    ItemMiniCard(
+                        item,
+                        onClick = {
+                            onOpenItem(item)
+                        },
+                        onFavorite = {
+                            onFavorite(item, !item.isFavorite)
+                        }
+                    )
+                }
+
+                // CREATE ITEM
+                item {
+                    OutlinedButton(
+                        onClick = onCreate,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text(
+                            "＋ Post an item",
+                            color = Forest
+                        )
+                    }
                 }
             }
         }
@@ -1382,3 +2069,220 @@ private fun hashPassword(password: String, salt: String): String {
 
 private fun verifyPassword(password: String, salt: String, expected: String): Boolean =
     java.security.MessageDigest.isEqual(hashPassword(password, salt).toByteArray(), expected.toByteArray())
+
+@Composable
+private fun RemoteFeedPanel(
+    state: RemoteFeedState,
+    onRefresh: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = Paper,
+        shadowElevation = 2.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "Network connection test",
+                color = Forest,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                "Demo service: JSONPlaceholder (not a FoundIt! backend)",
+                color = Olive,
+                fontSize = 11.sp
+            )
+
+            Button(
+                onClick = onRefresh,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Forest
+                )
+            ) {
+                Text("Load sample feed", color = Cream)
+            }
+
+            when (state) {
+                RemoteFeedState.Idle -> {
+                    Text("No request made yet", color = Olive)
+                }
+
+                RemoteFeedState.Loading -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            color = Forest
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text("Loading sample posts...")
+                    }
+                }
+
+                is RemoteFeedState.Success -> {
+                    Text(
+                        "Success: ${state.posts.size} sample posts received",
+                        color = Forest,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    state.posts.take(3).forEach { post ->
+                        Text(
+                            post.title,
+                            color = Forest,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            post.body,
+                            color = Olive,
+                            fontSize = 12.sp,
+                            maxLines = 3
+                        )
+                    }
+                }
+
+                RemoteFeedState.Empty -> {
+                    Text(
+                        "The service returned no posts.",
+                        color = Olive
+                    )
+                }
+
+                is RemoteFeedState.Error -> {
+                    Text(
+                        "Network error: ${state.message}",
+                        color = MaterialTheme.colorScheme.error
+                    )
+
+                    Button(
+                        onClick = onRefresh,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Forest
+                        )
+                    ) {
+                        Text("Retry", color = Cream)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoConnectionScreen(
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Cream)
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Text(
+                "⌁",
+                fontSize = 64.sp,
+                color = Olive
+            )
+
+            Text(
+                "No connection",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = Forest
+            )
+
+            Text(
+                "We couldn't connect to the internet. " +
+                        "Check your connection and try again.",
+                color = Olive,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyLarge
+            )
+
+            Button(
+                onClick = onRetry,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Forest
+                ),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Try again", color = Cream)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun rememberInternetConnection(): Boolean {
+    val context = LocalContext.current
+
+    var hasInternet by remember {
+        mutableStateOf(false)
+    }
+
+    DisposableEffect(context) {
+        val manager = context.getSystemService(
+            Context.CONNECTIVITY_SERVICE
+        ) as ConnectivityManager
+
+        fun checkConnection() {
+            val network = manager.activeNetwork
+            val capabilities =
+                manager.getNetworkCapabilities(network)
+
+            hasInternet =
+                capabilities?.hasCapability(
+                    NetworkCapabilities.NET_CAPABILITY_INTERNET
+                ) == true &&
+                        capabilities.hasCapability(
+                            NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                        )
+        }
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+
+            override fun onAvailable(network: Network) {
+                checkConnection()
+            }
+
+            override fun onLost(network: Network) {
+                checkConnection()
+            }
+
+            override fun onCapabilitiesChanged(
+                network: Network,
+                capabilities: NetworkCapabilities
+            ) {
+                hasInternet =
+                    capabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_INTERNET
+                    ) &&
+                            capabilities.hasCapability(
+                                NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                            )
+            }
+        }
+
+        checkConnection()
+
+        manager.registerDefaultNetworkCallback(callback)
+
+        onDispose {
+            manager.unregisterNetworkCallback(callback)
+        }
+    }
+
+    return hasInternet
+}
+
